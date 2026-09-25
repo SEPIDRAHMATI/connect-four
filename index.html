@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Four Online</title>
+<meta name="description" content="Play Connect Four with a friend on another device. Create a game, share the link, drop four in a row.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231d4ed8'/><circle cx='30' cy='35' r='14' fill='%23ef4444'/><circle cx='70' cy='35' r='14' fill='%23facc15'/><circle cx='30' cy='72' r='14' fill='%23facc15'/><circle cx='70' cy='72' r='14' fill='%23ef4444'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --panel: #ffffff;
+    --ink: #1f2330;
+    --muted: #6b6f7c;
+    --line: #e2ddd2;
+    --board: #1d4ed8;
+    --board-edge: #163ba5;
+    --hole: #f4f1ea;
+    --red: #ef4444;
+    --red-edge: #b91c1c;
+    --yellow: #facc15;
+    --yellow-edge: #ca9a04;
+    --accent: #1d4ed8;
+    --ok: #15803d;
+    --warn: #b45309;
+    --shadow: 0 10px 30px rgba(31, 35, 48, .10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12141b; --panel: #1b1e28; --ink: #eceef4; --muted: #9aa0b2; --line: #2b2f3c;
+      --board: #2554d8; --board-edge: #183ea8; --hole: #12141b; --accent: #7aa2ff;
+      --ok: #4ade80; --warn: #fbbf24; --shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12141b; --panel: #1b1e28; --ink: #eceef4; --muted: #9aa0b2; --line: #2b2f3c;
+    --board: #2554d8; --board-edge: #183ea8; --hole: #12141b; --accent: #7aa2ff;
+    --ok: #4ade80; --warn: #fbbf24; --shadow: 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Fredoka", system-ui, sans-serif; font-size: 17px; line-height: 1.45;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    padding: 20px 16px 40px;
+  }
+  h1 { font-size: clamp(28px, 7vw, 40px); margin: 6px 0 2px; font-weight: 700; letter-spacing: -.5px; }
+  h1 .r { color: var(--red); } h1 .y { color: var(--yellow-edge); }
+  .tag { color: var(--muted); margin: 0 0 20px; text-align: center; }
+  .wrap { width: 100%; max-width: 520px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+    padding: 20px; box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .hidden { display: none !important; }
+  label { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
+  input {
+    width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+    border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 14px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 12px; padding: 12px 18px;
+    cursor: pointer; background: var(--accent); color: #fff; transition: transform .08s, filter .15s;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { transform: translateY(1px); }
+  button.ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .or { text-align: center; color: var(--muted); font-size: 14px; margin: 16px 0; position: relative; }
+  .or::before, .or::after { content: ""; position: absolute; top: 50%; width: 40%; height: 1px; background: var(--line); }
+  .or::before { left: 0; } .or::after { right: 0; }
+  .code {
+    font-size: 34px; font-weight: 700; letter-spacing: 6px; text-align: center;
+    background: var(--bg); border-radius: 12px; padding: 10px; margin: 8px 0 12px; user-select: all;
+  }
+  .center { text-align: center; }
+  .muted { color: var(--muted); font-size: 15px; }
+  .err { color: var(--red); font-size: 15px; min-height: 1.2em; margin-top: 8px; }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent);
+    display: inline-block; vertical-align: -3px; margin-right: 8px; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* players bar */
+  .players { display: flex; gap: 10px; margin-bottom: 12px; }
+  .player {
+    flex: 1; display: flex; align-items: center; gap: 10px; background: var(--panel);
+    border: 2px solid var(--line); border-radius: 14px; padding: 10px 12px; min-width: 0;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .player.active { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  .player .dot { width: 26px; height: 26px; border-radius: 50%; flex: none; }
+  .player .info { min-width: 0; flex: 1; }
+  .player .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .player .sub { font-size: 13px; color: var(--muted); }
+  .player .score { font-size: 24px; font-weight: 700; }
+  .dot.p1 { background: var(--red); box-shadow: inset 0 -3px 0 var(--red-edge); }
+  .dot.p2 { background: var(--yellow); box-shadow: inset 0 -3px 0 var(--yellow-edge); }
+
+  .status { text-align: center; font-weight: 600; font-size: 19px; min-height: 28px; margin: 4px 0 12px; }
+  .status.win { color: var(--ok); } .status.lose { color: var(--red); }
+
+  /* board */
+  .board {
+    --gap: clamp(5px, 1.6vw, 10px);
+    background: var(--board); border-radius: 18px; padding: var(--gap);
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: var(--gap);
+    box-shadow: inset 0 -6px 0 var(--board-edge), var(--shadow); position: relative; touch-action: manipulation;
+  }
+  .col { display: grid; grid-template-rows: repeat(6, 1fr); gap: var(--gap); border-radius: 12px; cursor: pointer; position: relative; }
+  .board.locked .col { cursor: default; }
+  .col.hover { background: rgba(255,255,255,.12); }
+  .cell { aspect-ratio: 1; border-radius: 50%; background: var(--hole); position: relative; overflow: hidden; box-shadow: inset 0 3px 6px rgba(0,0,0,.25); }
+  .disc { position: absolute; inset: 0; border-radius: 50%; }
+  .disc.p1 { background: radial-gradient(circle at 35% 30%, #ff8080, var(--red) 55%, var(--red-edge)); }
+  .disc.p2 { background: radial-gradient(circle at 35% 30%, #fff08a, var(--yellow) 55%, var(--yellow-edge)); }
+  .disc.drop { animation: drop var(--dur, .4s) cubic-bezier(.45,0,.9,.55) both; }
+  @keyframes drop { from { transform: translateY(calc(var(--fall) * -118%)); } to { transform: translateY(0); } }
+  .disc.winner { animation: pulse .9s ease-in-out infinite alternate; box-shadow: 0 0 0 4px #fff inset; }
+  @keyframes pulse { to { filter: brightness(1.25); transform: scale(.9); } }
+  .preview { position: absolute; left: 50%; top: calc(-1 * var(--gap) - 2px); width: 60%; aspect-ratio: 1; transform: translate(-50%, -100%); border-radius: 50%; opacity: 0; transition: opacity .12s; pointer-events: none; }
+  .col.hover .preview { opacity: .85; }
+  .board-wrap { padding-top: 44px; }
+
+  .actions { display: flex; gap: 10px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+  .banner { background: color-mix(in srgb, var(--warn) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: 12px; padding: 10px 14px; margin-bottom: 12px; font-size: 15px; }
+
+  details.rules { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 14px 20px; box-shadow: var(--shadow); }
+  details.rules summary { cursor: pointer; font-weight: 600; }
+  details.rules ol { margin: 10px 0 4px; padding-left: 20px; }
+  details.rules li { margin-bottom: 6px; }
+  .theme-btn { position: fixed; top: 12px; right: 12px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); padding: 8px 11px; border-radius: 10px; font-size: 16px; }
+  footer { margin-top: 18px; font-size: 13px; color: var(--muted); text-align: center; }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 15px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<button class="theme-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle light or dark theme">◐</button>
+
+<h1><span class="r">Connect</span> <span class="y">Four</span></h1>
+<p class="tag">Two players, two devices, one board. Get four in a row to win.</p>
+
+<div class="wrap">
+  <!-- Lobby -->
+  <section id="lobby" class="card">
+    <label for="nameInput">Your name</label>
+    <input id="nameInput" maxlength="16" placeholder="e.g. Sepi" autocomplete="nickname">
+    <div style="height:14px"></div>
+    <button id="createBtn" style="width:100%">Create a new game</button>
+    <div class="or">or join a friend</div>
+    <div class="row">
+      <input id="codeInput" maxlength="5" placeholder="GAME CODE" style="text-transform:uppercase;letter-spacing:3px;text-align:center" autocomplete="off">
+      <button id="joinBtn" style="flex:0 0 auto">Join</button>
+    </div>
+    <div class="err" id="lobbyErr"></div>
+  </section>
+
+  <!-- Waiting for opponent -->
+  <section id="waiting" class="card center hidden">
+    <div class="muted">Share this code with your opponent</div>
+    <div class="code" id="codeShow">-----</div>
+    <div class="row">
+      <button id="copyLinkBtn">Copy invite link</button>
+      <button id="shareBtn" class="ghost">Share…</button>
+    </div>
+    <p class="muted" style="margin:16px 0 0"><span class="spinner"></span>Waiting for someone to join…</p>
+    <button class="ghost" id="cancelBtn" style="margin-top:14px">Cancel</button>
+  </section>
+
+  <!-- Connecting (guest) -->
+  <section id="connecting" class="card center hidden">
+    <p style="margin:6px 0"><span class="spinner"></span><span id="connectingText">Connecting to game…</span></p>
+    <div class="err" id="connectErr"></div>
+    <button class="ghost hidden" id="backBtn" style="margin-top:10px">Back</button>
+  </section>
+
+  <!-- Game -->
+  <section id="game" class="hidden">
+    <div class="banner hidden" id="banner"></div>
+    <div class="players">
+      <div class="player" id="pl1"><div class="dot p1"></div><div class="info"><div class="name" id="n1">Red</div><div class="sub" id="s1">Red</div></div><div class="score" id="sc1">0</div></div>
+      <div class="player" id="pl2"><div class="dot p2"></div><div class="info"><div class="name" id="n2">Yellow</div><div class="sub" id="s2">Yellow</div></div><div class="score" id="sc2">0</div></div>
+    </div>
+    <div class="status" id="status" aria-live="polite"></div>
+    <div class="board-wrap"><div class="board" id="board" role="grid" aria-label="Connect Four board"></div></div>
+    <div class="actions">
+      <button id="rematchBtn" class="hidden">Play again</button>
+      <button id="leaveBtn" class="ghost">Leave game</button>
+    </div>
+  </section>
+
+  <div style="height:16px"></div>
+  <details class="rules" id="rules" open>
+    <summary>How to play</summary>
+    <ol>
+      <li><b>Start:</b> one player taps <i>Create a new game</i> and sends the invite link or 5-letter code to a friend. The friend opens the link (or enters the code) on their own device.</li>
+      <li><b>Colors:</b> the creator plays <b style="color:var(--red)">Red</b>, the friend plays <b style="color:var(--yellow-edge)">Yellow</b>. Red moves first in game one; after that, the starting player alternates each round.</li>
+      <li><b>Your turn:</b> tap any column that isn't full. Your disc falls to the lowest empty spot in that column.</li>
+      <li><b>Win:</b> the first player to line up <b>four of their discs in a row</b> — horizontally, vertically, or diagonally — wins the round and scores a point.</li>
+      <li><b>Draw:</b> if all 42 spots fill up with no four-in-a-row, the round is a draw.</li>
+      <li><b>Rematch:</b> when a round ends, either player can tap <i>Play again</i>. Scores carry over until someone leaves.</li>
+    </ol>
+  </details>
+  <footer>Moves travel directly between the two browsers (peer-to-peer). No account needed.</footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const ROWS = 6, COLS = 7;
+  const PREFIX = "c4online-sr26-";
+  const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const $ = id => document.getElementById(id);
+
+  // ---------- theme ----------
+  const root = document.documentElement;
+  try { const t = localStorage.getItem("c4-theme"); if (t) root.dataset.theme = t; } catch {}
+  $("themeBtn").onclick = () => {
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("c4-theme", root.dataset.theme); } catch {}
+  };
+
+  // ---------- name ----------
+  try { $("nameInput").value = localStorage.getItem("c4-name") || ""; } catch {}
+  const myName = () => {
+    const n = $("nameInput").value.trim().slice(0, 16);
+    try { localStorage.setItem("c4-name", n); } catch {}
+    return n;
+  };
+
+  // ---------- ui helpers ----------
+  const screens = ["lobby", "waiting", "connecting", "game"];
+  function show(id) { screens.forEach(s => $(s).classList.toggle("hidden", s !== id)); }
+  let toastTimer;
+  function toast(msg) {
+    const t = $("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+  }
+  function banner(msg) { $("banner").textContent = msg || ""; $("banner").classList.toggle("hidden", !msg); }
+
+  // ---------- game logic (pure) ----------
+  function newBoard() { return Array.from({ length: ROWS }, () => Array(COLS).fill(0)); }
+  function newState(starter, scores, names) {
+    return { board: newBoard(), turn: starter, starter, winner: 0, line: [], last: null, moves: 0,
+             scores: scores || { 1: 0, 2: 0 }, names: names || { 1: "", 2: "" }, round: 1 };
+  }
+  function findWin(board, r, c) {
+    const p = board[r][c];
+    for (const [dr, dc] of [[0,1],[1,0],[1,1],[1,-1]]) {
+      const line = [[r, c]];
+      for (const s of [1, -1]) {
+        let rr = r + dr * s, cc = c + dc * s;
+        while (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS && board[rr][cc] === p) {
+          line.push([rr, cc]); rr += dr * s; cc += dc * s;
+        }
+      }
+      if (line.length >= 4) return line;
+    }
+    return null;
+  }
+  // returns true if the move was legal and applied
+  function applyMove(st, player, col) {
+    if (st.winner || st.turn !== player || col < 0 || col >= COLS) return false;
+    let r = ROWS - 1;
+    while (r >= 0 && st.board[r][col]) r--;
+    if (r < 0) return false;
+    st.board[r][col] = player; st.last = [r, col]; st.moves++;
+    const line = findWin(st.board, r, col);
+    if (line) { st.winner = player; st.line = line; st.scores[player]++; }
+    else if (st.moves === ROWS * COLS) { st.winner = 3; }
+    else st.turn = 3 - player;
+    return true;
+  }
+
+  // ---------- networking ----------
+  let peer = null, conn = null, role = null, me = 0, state = null, code = "";
+
+  function makeCode() {
+    let s = ""; const a = new Uint32Array(5); crypto.getRandomValues(a);
+    for (const x of a) s += ALPHABET[x % ALPHABET.length];
+    return s;
+  }
+  function inviteLink(c) { const u = new URL(location.href); u.search = "?join=" + c; u.hash = ""; return u.toString(); }
+
+  function teardown() {
+    try { conn && conn.close(); } catch {}
+    try { peer && peer.destroy(); } catch {}
+    peer = conn = null; role = null; me = 0; state = null; code = "";
+    banner("");
+    history.replaceState(null, "", location.pathname);
+  }
+
+  // Host: owns the authoritative game state
+  function hostGame(attempt = 0) {
+    teardown();
+    role = "host"; me = 1; code = makeCode();
+    $("codeShow").textContent = code;
+    show("waiting");
+    peer = new Peer(PREFIX + code);
+    peer.on("open", () => {});
+    peer.on("error", err => {
+      if (err.type === "unavailable-id" && attempt < 3) return hostGame(attempt + 1);
+      if (role !== "host") return;
+      showLobbyError("Couldn't start a game (" + (err.type || err.message) + "). Check your connection and try again.");
+    });
+    peer.on("disconnected", () => { try { peer.reconnect(); } catch {} });
+    peer.on("connection", c => {
+      if (conn && conn.open) { c.on("open", () => { c.send({ t: "full" }); setTimeout(() => c.close(), 300); }); return; }
+      conn = c;
+      c.on("data", msg => onHostMsg(c, msg));
+      c.on("close", () => {
+        if (conn !== c) return;
+        conn = null;
+        if (state) { banner("Your opponent disconnected. They can rejoin with code " + code + " — scores are kept."); renderAll(); }
+      });
+    });
+  }
+  function onHostMsg(c, msg) {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.t === "hello") {
+      const guestName = String(msg.name || "").slice(0, 16);
+      if (!state) state = newState(1, null, { 1: myName(), 2: guestName });
+      else state.names[2] = guestName;
+      banner("");
+      show("game"); $("rules").open = false;
+      broadcast(); renderAll(true);
+      toast((guestName || "Your opponent") + " joined!");
+    } else if (msg.t === "move") {
+      if (state && applyMove(state, 2, msg.col | 0)) { broadcast(); renderAll(); }
+    } else if (msg.t === "rematch") {
+      doRematch();
+    }
+  }
+  function broadcast() { if (conn && conn.open) conn.send({ t: "state", s: state }); }
+  function doRematch() {
+    if (!state || !state.winner) return;
+    const next = newState(3 - state.starter, state.scores, state.names);
+    next.round = state.round + 1;
+    state = next; broadcast(); renderAll(true);
+  }
+
+  // Guest: sends intents, renders host state
+  function joinGame(c) {
+    c = (c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (c.length !== 5) return showLobbyError("Game codes are 5 characters.");
+    teardown();
+    role = "guest"; me = 2; code = c;
+    history.replaceState(null, "", "?join=" + c);
+    show("connecting");
+    $("connectingText").textContent = "Connecting to game " + c + "…";
+    $("connectErr").textContent = ""; $("backBtn").classList.add("hidden");
+    peer = new Peer();
+    const fail = m => { if (role !== "guest") return; $("connectErr").textContent = m; $("backBtn").classList.remove("hidden"); $("connectingText").textContent = "Couldn't connect"; };
+    const timer = setTimeout(() => { if (!state) fail("Taking too long. Double-check the code, and make sure the other player still has the game open."); }, 15000);
+    peer.on("error", err => {
+      clearTimeout(timer);
+      if (err.type === "peer-unavailable") fail("No game found with code " + c + ". Check the code, or ask your friend to create a new game.");
+      else fail("Connection error (" + (err.type || err.message) + "). Try again.");
+    });
+    peer.on("open", () => {
+      conn = peer.connect(PREFIX + c, { reliable: true });
+      conn.on("open", () => conn.send({ t: "hello", name: myName() }));
+      conn.on("data", msg => {
+        if (!msg || typeof msg !== "object") return;
+        if (msg.t === "full") { clearTimeout(timer); fail("That game already has two players."); return; }
+        if (msg.t === "state") {
+          clearTimeout(timer);
+          const first = !state;
+          state = msg.s; banner("");
+          if (first) { show("game"); $("rules").open = false; }
+          renderAll(first);
+        }
+      });
+      conn.on("close", () => {
+        if (role !== "guest" || !state) return;
+        banner("Lost connection to the host. ");
+        const b = document.createElement("button"); b.textContent = "Rejoin"; b.style.cssText = "padding:6px 12px;margin-left:6px";
+        b.onclick = () => joinGame(code); $("banner").appendChild(b);
+        renderAll();
+      });
+    });
+  }
+
+  function showLobbyError(m) { show("lobby"); $("lobbyErr").textContent = m; }
+
+  // ---------- rendering ----------
+  const boardEl = $("board");
+  const cols = [];
+  for (let c = 0; c < COLS; c++) {
+    const col = document.createElement("div");
+    col.className = "col"; col.dataset.c = c; col.setAttribute("role", "button"); col.setAttribute("aria-label", "Column " + (c + 1));
+    col.tabIndex = 0;
+    const prev = document.createElement("div"); prev.className = "preview"; col.appendChild(prev);
+    for (let r = 0; r < ROWS; r++) { const cell = document.createElement("div"); cell.className = "cell"; col.appendChild(cell); }
+    col.addEventListener("click", () => tryMove(c));
+    col.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tryMove(c); } });
+    col.addEventListener("mouseenter", () => { if (myTurn()) col.classList.add("hover"); });
+    col.addEventListener("mouseleave", () => col.classList.remove("hover"));
+    boardEl.appendChild(col); cols.push(col);
+  }
+  const cellAt = (r, c) => cols[c].children[r + 1];
+
+  const connected = () => conn && conn.open;
+  const myTurn = () => state && !state.winner && state.turn === me && connected();
+
+  function tryMove(c) {
+    if (!myTurn()) {
+      if (state && !state.winner && state.turn !== me) toast("Wait for your opponent's move");
+      return;
+    }
+    if (state.board[0][c]) { toast("That column is full"); return; }
+    cols[c].classList.remove("hover");
+    if (role === "host") { if (applyMove(state, 1, c)) { broadcast(); renderAll(); } }
+    else conn.send({ t: "move", col: c });
+  }
+
+  let shown = null; // board we last drew, to know which disc is new
+  function renderAll(reset) {
+    if (!state) return;
+    if (reset) shown = null;
+    const winSet = new Set((state.line || []).map(([r, c]) => r + "," + c));
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const v = state.board[r][c], cell = cellAt(r, c);
+      const had = shown ? shown[r][c] : 0;
+      if (!v) { cell.innerHTML = ""; continue; }
+      let disc = cell.firstChild;
+      if (!disc || had !== v) {
+        cell.innerHTML = ""; disc = document.createElement("div");
+        disc.className = "disc p" + v;
+        if (shown) { disc.classList.add("drop"); disc.style.setProperty("--fall", r + 1); disc.style.setProperty("--dur", (0.18 + r * 0.06) + "s"); }
+        cell.appendChild(disc);
+      }
+      disc.classList.toggle("winner", winSet.has(r + "," + c));
+    }
+    shown = state.board.map(row => row.slice());
+
+    // previews + lock
+    const color = "var(--" + (me === 1 ? "red" : "yellow") + ")";
+    cols.forEach(col => { col.firstChild.style.background = color; if (!myTurn()) col.classList.remove("hover"); });
+    boardEl.classList.toggle("locked", !myTurn());
+
+    // players
+    for (const p of [1, 2]) {
+      const nm = state.names[p] || (p === 1 ? "Red" : "Yellow");
+      $("n" + p).textContent = nm + (p === me ? " (you)" : "");
+      $("s" + p).textContent = p === 1 ? "Red" : "Yellow";
+      $("sc" + p).textContent = state.scores[p];
+      $("pl" + p).classList.toggle("active", !state.winner && state.turn === p);
+    }
+
+    // status
+    const st = $("status"); st.className = "status";
+    const opp = state.names[3 - me] || "Opponent";
+    if (!connected()) st.textContent = role === "host" ? "Waiting for your opponent to reconnect…" : "Disconnected";
+    else if (state.winner === 3) st.textContent = "It's a draw! The board is full.";
+    else if (state.winner === me) { st.textContent = "🎉 You win! Four in a row."; st.classList.add("win"); }
+    else if (state.winner) { st.textContent = opp + " wins this round."; st.classList.add("lose"); }
+    else if (state.turn === me) st.textContent = "Your turn — tap a column";
+    else st.textContent = opp + " is thinking…";
+
+    $("rematchBtn").classList.toggle("hidden", !state.winner || !connected());
+  }
+
+  // ---------- buttons ----------
+  $("createBtn").onclick = () => { $("lobbyErr").textContent = ""; myName(); hostGame(); };
+  $("joinBtn").onclick = () => { $("lobbyErr").textContent = ""; joinGame($("codeInput").value); };
+  $("codeInput").addEventListener("keydown", e => { if (e.key === "Enter") $("joinBtn").click(); });
+  $("copyLinkBtn").onclick = async () => {
+    try { await navigator.clipboard.writeText(inviteLink(code)); toast("Invite link copied"); }
+    catch { prompt("Copy this link:", inviteLink(code)); }
+  };
+  $("shareBtn").onclick = async () => {
+    const url = inviteLink(code);
+    if (navigator.share) { try { await navigator.share({ title: "Connect Four", text: "Play Connect Four with me! Code " + code, url }); } catch {} }
+    else { try { await navigator.clipboard.writeText(url); toast("Invite link copied"); } catch { prompt("Copy this link:", url); } }
+  };
+  $("cancelBtn").onclick = () => { teardown(); show("lobby"); };
+  $("backBtn").onclick = () => { teardown(); show("lobby"); };
+  $("leaveBtn").onclick = () => { if (confirm("Leave this game?")) { teardown(); show("lobby"); $("rules").open = true; } };
+  $("rematchBtn").onclick = () => {
+    if (role === "host") doRematch();
+    else if (connected()) conn.send({ t: "rematch" });
+  };
+  window.addEventListener("beforeunload", () => { try { peer && peer.destroy(); } catch {} });
+
+  // auto-join from invite link
+  const q = new URLSearchParams(location.search).get("join");
+  if (q) { $("codeInput").value = q.toUpperCase(); joinGame(q); }
+})();
+</script>
+</body>
+</html>

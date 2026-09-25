@@ -9,6 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script src="net.js"></script>
 <style>
   :root {
     --bg: #f4f1ea;
@@ -211,7 +213,7 @@
       <li><b>Rematch:</b> when a round ends, either player can tap <i>Play again</i>. Scores carry over until someone leaves.</li>
     </ol>
   </details>
-  <footer>Moves travel directly between the two browsers (peer-to-peer). No account needed.</footer>
+  <footer>Moves travel directly between the two browsers when the networks allow it, and through a relay server otherwise. No account needed.</footer>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -219,6 +221,8 @@
 (() => {
   const ROWS = 6, COLS = 7;
   const PREFIX = "c4online-sr26-";
+  const TOPIC = "sr26-games/connect4";
+  const FORCE_RELAY = new URLSearchParams(location.search).has("relay");
   const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const $ = id => document.getElementById(id);
 
@@ -284,7 +288,7 @@
   }
 
   // ---------- networking ----------
-  let peer = null, conn = null, role = null, me = 0, state = null, code = "";
+  let net = null, conn = null, role = null, me = 0, state = null, code = "";
 
   function makeCode() {
     let s = ""; const a = new Uint32Array(5); crypto.getRandomValues(a);
@@ -295,8 +299,8 @@
 
   function teardown() {
     try { conn && conn.close(); } catch {}
-    try { peer && peer.destroy(); } catch {}
-    peer = conn = null; role = null; me = 0; state = null; code = "";
+    try { net && net.stop(); } catch {}
+    net = conn = null; role = null; me = 0; state = null; code = "";
     banner("");
     history.replaceState(null, "", location.pathname);
   }
@@ -307,23 +311,22 @@
     role = "host"; me = 1; code = makeCode();
     $("codeShow").textContent = code;
     show("waiting");
-    peer = new Peer(PREFIX + code);
-    peer.on("open", () => {});
-    peer.on("error", err => {
-      if (err.type === "unavailable-id" && attempt < 3) return hostGame(attempt + 1);
-      if (role !== "host") return;
-      showLobbyError("Couldn't start a game (" + (err.type || err.message) + "). Check your connection and try again.");
-    });
-    peer.on("disconnected", () => { try { peer.reconnect(); } catch {} });
-    peer.on("connection", c => {
-      if (conn && conn.open) { c.on("open", () => { c.send({ t: "full" }); setTimeout(() => c.close(), 300); }); return; }
-      conn = c;
-      c.on("data", msg => onHostMsg(c, msg));
-      c.on("close", () => {
-        if (conn !== c) return;
-        conn = null;
-        if (state) { banner("Your opponent disconnected. They can rejoin with code " + code + " — scores are kept."); renderAll(); }
-      });
+    net = GameNet.host({
+      prefix: PREFIX, topic: TOPIC, code,
+      onError: err => {
+        if (err.type === "unavailable-id" && attempt < 3) return hostGame(attempt + 1);
+        if (role === "host" && !state) showLobbyError("Couldn't start a game — check your internet connection and try again.");
+      },
+      onLink: link => {
+        if (conn && conn.open) { link.send({ t: "full" }); setTimeout(() => link.close(), 300); return; }
+        conn = link;
+        link.onData = msg => onHostMsg(link, msg);
+        link.onClose = () => {
+          if (conn !== link) return;
+          conn = null;
+          if (state) { banner("Your opponent disconnected. They can rejoin with code " + code + " — scores are kept."); renderAll(); }
+        };
+      }
     });
   }
   function onHostMsg(c, msg) {
@@ -360,36 +363,33 @@
     show("connecting");
     $("connectingText").textContent = "Connecting to game " + c + "…";
     $("connectErr").textContent = ""; $("backBtn").classList.add("hidden");
-    peer = new Peer();
-    const fail = m => { if (role !== "guest") return; $("connectErr").textContent = m; $("backBtn").classList.remove("hidden"); $("connectingText").textContent = "Couldn't connect"; };
-    const timer = setTimeout(() => { if (!state) fail("Taking too long. Double-check the code, and make sure the other player still has the game open."); }, 15000);
-    peer.on("error", err => {
-      clearTimeout(timer);
-      if (err.type === "peer-unavailable") fail("No game found with code " + c + ". Check the code, or ask your friend to create a new game.");
-      else fail("Connection error (" + (err.type || err.message) + "). Try again.");
-    });
-    peer.on("open", () => {
-      conn = peer.connect(PREFIX + c, { reliable: true });
-      conn.on("open", () => conn.send({ t: "hello", name: myName() }));
-      conn.on("data", msg => {
-        if (!msg || typeof msg !== "object") return;
-        if (msg.t === "full") { clearTimeout(timer); fail("That game already has two players."); return; }
-        if (msg.t === "state") {
-          clearTimeout(timer);
-          const first = !state;
-          state = msg.s; banner("");
-          if (first) { show("game"); $("rules").open = false; }
-          renderAll(first);
-        }
-      });
-      conn.on("close", () => {
-        if (role !== "guest" || !state) return;
-        banner("Lost connection to the host. ");
-        const b = document.createElement("button"); b.textContent = "Rejoin"; b.style.cssText = "padding:6px 12px;margin-left:6px";
-        b.onclick = () => joinGame(code); $("banner").appendChild(b);
-        renderAll();
-      });
-    });
+    const fail = m => { if (role !== "guest" || code !== c) return; $("connectErr").textContent = m; $("backBtn").classList.remove("hidden"); $("connectingText").textContent = "Couldn't connect"; };
+    GameNet.join({ prefix: PREFIX, topic: TOPIC, code: c, forceRelay: FORCE_RELAY, onStatus: t => { if (code === c) $("connectingText").textContent = t; } })
+      .then(link => {
+        if (role !== "guest" || code !== c) { link.close(); return; }
+        conn = link;
+        const timer = setTimeout(() => { if (!state) fail("Connected, but the game didn't respond. Ask the other player to create a new game."); }, 10000);
+        link.onData = msg => {
+          if (!msg || typeof msg !== "object") return;
+          if (msg.t === "full") { clearTimeout(timer); fail("That game already has two players."); return; }
+          if (msg.t === "state") {
+            clearTimeout(timer);
+            const first = !state;
+            state = msg.s; banner("");
+            if (first) { show("game"); $("rules").open = false; }
+            renderAll(first);
+          }
+        };
+        link.onClose = () => {
+          if (role !== "guest" || conn !== link || !state) return;
+          banner("Lost connection to the host. ");
+          const b = document.createElement("button"); b.textContent = "Rejoin"; b.style.cssText = "padding:6px 12px;margin-left:6px";
+          b.onclick = () => joinGame(code); $("banner").appendChild(b);
+          renderAll();
+        };
+        link.send({ t: "hello", name: myName() });
+      })
+      .catch(() => fail("Couldn't reach game " + c + ". Check the code and make sure the other player still has the game open — on a phone, keep the game on screen (switching apps can pause it)."));
   }
 
   function showLobbyError(m) { show("lobby"); $("lobbyErr").textContent = m; }
@@ -492,7 +492,9 @@
     if (role === "host") doRematch();
     else if (connected()) conn.send({ t: "rematch" });
   };
-  window.addEventListener("beforeunload", () => { try { peer && peer.destroy(); } catch {} });
+  window.addEventListener("beforeunload", () => { try { conn && conn.close(); net && net.stop(); } catch {} });
+
+  window.__c4 = { get state() { return state; }, get link() { return conn && conn.kind; } };
 
   // auto-join from invite link
   const q = new URLSearchParams(location.search).get("join");
